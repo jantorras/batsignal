@@ -1,7 +1,6 @@
 <?php
-// CLI runner: executes all checks that are due. Meant to be triggered every
-// minute by Windows Task Scheduler:
-//   C:\xampp\php\php.exe C:\xampp\htdocs\BatSignal\cron\run_checks.php
+// CLI runner: executes all checks that are due. Triggered every minute by
+// the `runner` container's loop (docker/runner-loop.sh) in production.
 
 declare(strict_types=1);
 

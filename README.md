@@ -21,42 +21,28 @@ BatSignal/
     run_checks.php   Script CLI que executa els checks pendents
   db/
     schema.sql    Esquema MySQL/MariaDB
-  public/         Arrel web (http://localhost/BatSignal/)
+  public/         Arrel web (és el document root que serveix el contenidor `web`)
   vendor/phpmailer/  PHPMailer vendoritzat a mà (no hi ha Composer instal·lat)
 ```
 
 ## Primer arrencada
 
-1. Base de dades: ja aplicada (`batsignal` a MariaDB de XAMPP, usuari `root` sense contrasenya).
-   Si cal recrear-la: `mysql -u root < db/schema.sql`.
-2. Configuració de l'app: `app/config/config.php` (copiat de `config.example.php`).
-   Ajusta-hi les credencials de BD si mai canvien.
-3. Obre `http://localhost/BatSignal/` al navegador → et portarà a `setup.php`
-   per crear el primer usuari administrador (només funciona si no hi ha cap
-   usuari encara).
-4. Un cop logat, ves a **Configuració** per posar les dades SMTP i l'email
-   (o emails, separats per comes) on vols rebre les alertes. Pots enviar un
-   correu de prova des de la mateixa pàgina.
-5. Ves a **Webs** per afegir les teves webs, i dins de cada web afegeix els
-   **checks** (HTTP i/o SSL) que vulguis, amb la seva freqüència.
+BatSignal està pensat per córrer només amb Docker, en un servidor Linux
+(vegeu **Desplegament en un servidor**, més avall). El propi desplegament ja
+deixa la base de dades creada, l'usuari administrador creat, i el
+`runner` executant `cron/run_checks.php` cada minut sol — no cal cap pas
+manual addicional ni programar cap tasca externa.
 
-## Programar l'execució dels checks
+Un cop el panell és accessible:
 
-BatSignal no comprova res sol — necessita que algú executi
-`cron/run_checks.php` periòdicament. A Windows, amb el Task Scheduler:
+1. Entra amb l'usuari que vas crear durant la instal·lació.
+2. Ves a **Configuració** per posar les dades SMTP i l'email (o emails,
+   separats per comes) on vols rebre les alertes. Pots enviar un correu de
+   prova des de la mateixa pàgina.
+3. Ves a **Webs** per afegir les teves webs; cada web queda vigilada
+   automàticament (portada, totes les pàgines i SSL).
 
-- Programa: `C:\xampp\php\php.exe`
-- Arguments: `C:\xampp\htdocs\BatSignal\cron\run_checks.php`
-- Freqüència: cada 1 minut (el script només executa els checks que ja toquen
-  segons la freqüència configurada de cadascun)
-
-Es pot provar manualment amb:
-
-```
-C:\xampp\php\php.exe C:\xampp\htdocs\BatSignal\cron\run_checks.php
-```
-
-## Tipus de checks (Fase 1)
+## Tipus de checks
 
 En afegir una web es creen automàticament aquests tres checks (a una web
 existent sense checks, el botó "Activar monitoratge complet" fa el mateix):
@@ -156,9 +142,10 @@ IP:port continua funcionant sempre, encara que hi hagi un domini configurat.
 Tècnicament s'afegeix un tercer contenidor (`proxy`, Caddy) que només
 arrenca quan hi ha un domini configurat.
 
-**Portar les dades del XAMPP:** exporta la BD `batsignal` des de phpMyAdmin
-(Exportar → SQL), copia el fitxer a `backups/` al servidor i tria **7)
-Restaurar**. S'hi aplicaran les migracions que faltin.
+**Importar dades d'una instal·lació anterior:** exporta la BD `batsignal`
+(phpMyAdmin → Exportar, o `mysqldump`), copia el fitxer `.sql`/`.sql.gz` a
+`backups/` al servidor i tria **7) Restaurar**. S'hi aplicaran les
+migracions que faltin.
 
 Com està muntat: tres contenidors (`db` MariaDB, `web` Apache+PHP que només
 serveix `public/`, `runner` que executa els checks cada minut); dades en un
@@ -224,9 +211,10 @@ correus**.
 
 ## Notes
 
-- El desplegament és al mateix servidor XAMPP: si aquest servidor cau,
-  BatSignal cau amb ell i no pot avisar-te'n. És una limitació coneguda de
-  la v1 (es pot moure a un VPS extern més endavant sense canviar
-  l'arquitectura).
-- `app/config/config.php` conté credencials locals i no s'hauria de
-  versionar si en algun moment s'inicialitza git en aquest projecte.
+- Si BatSignal corre al mateix servidor que allotja les webs que vigila, i
+  aquell servidor cau, BatSignal cau amb ell i no pot avisar-te'n. Per això
+  es recomana un servidor Linux dedicat, només per a BatSignal (secció
+  **Desplegament en un servidor**).
+- `app/config/config.php` no conté cap credencial (les llegeix de variables
+  d'entorn, que posa Docker a partir del `.env`), per això sí que està
+  versionat.

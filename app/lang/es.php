@@ -150,7 +150,7 @@ return [
     'site.add_check' => 'Añadir check',
     'site.history_title' => 'Historial reciente',
     'site.history_empty_title' => 'Sin ejecuciones todavía',
-    'site.history_empty_text' => 'Pulsa «Ejecutar ahora» o espera a que el Task Scheduler lance el runner.',
+    'site.history_empty_text' => 'Pulsa «Ejecutar ahora» o espera al próximo ciclo automático.',
 
     'incidents.eyebrow' => 'Historial',
     'incidents.h1' => 'Incidencias',

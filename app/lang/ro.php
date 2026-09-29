@@ -150,7 +150,7 @@ return [
     'site.add_check' => 'Adaugă verificare',
     'site.history_title' => 'Istoric recent',
     'site.history_empty_title' => 'Încă nicio rulare',
-    'site.history_empty_text' => 'Apasă „Rulează acum” sau așteaptă ca Task Scheduler să pornească runner-ul.',
+    'site.history_empty_text' => 'Apasă „Rulează acum” sau așteaptă următorul ciclu automat.',
 
     'incidents.eyebrow' => 'Istoric',
     'incidents.h1' => 'Incidente',

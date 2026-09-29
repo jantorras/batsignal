@@ -1,5 +1,5 @@
 #!/bin/sh
-# Runs the check runner once a minute (replaces the Windows Task Scheduler / cron).
+# Runs the check runner once a minute (replaces an external cron job).
 cd /var/www/html || exit 1
 
 echo "[runner] Esperant la base de dades..."

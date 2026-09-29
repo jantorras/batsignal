@@ -156,7 +156,7 @@ return [
     'site.add_check' => 'Afegir check',
     'site.history_title' => 'Historial recent',
     'site.history_empty_title' => 'Sense execucions encara',
-    'site.history_empty_text' => 'Prem «Executar ara» o espera que el Task Scheduler llanci el runner.',
+    'site.history_empty_text' => 'Prem «Executar ara» o espera el proper cicle automàtic.',
 
     // Incidents
     'incidents.eyebrow' => 'Historial',

@@ -1,6 +1,6 @@
 <?php
 // Values come from environment variables (Docker sets them from .env);
-// the fallbacks are the local XAMPP defaults.
+// the fallbacks are for a local MySQL/MariaDB with no auth configured.
 $env = fn(string $key, string $default) => ($v = getenv($key)) !== false && $v !== '' ? $v : $default;
 
 return [

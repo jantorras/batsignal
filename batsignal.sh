@@ -807,7 +807,7 @@ do_restore() {
     installed && detect_compose && docker_ok || { err "BatSignal ha d'estar instal·lat i en marxa per restaurar."; return 1; }
     lock_or_wait || return 1
     step "♻" "Restaurar una còpia o importar dades"
-    info "També pots importar les dades del XAMPP: exporta la BD 'batsignal' (phpMyAdmin → Exportar, o mysqldump) i copia el fitxer .sql a $BACKUP_DIR/"
+    info "També pots importar dades d'una instal·lació anterior: exporta la BD 'batsignal' (phpMyAdmin → Exportar, o mysqldump) i copia el fitxer .sql a $BACKUP_DIR/"
     mapfile -t files < <(ls -1t "$BACKUP_DIR"/*.sql.gz "$BACKUP_DIR"/*.sql 2>/dev/null)
     local i choice file
     if (( ${#files[@]} == 0 )); then warn "No hi ha cap còpia a $BACKUP_DIR."
@@ -834,7 +834,7 @@ do_restore() {
         dc exec -T web php bin/migrate.php
         dc start runner >/dev/null 2>&1
         ok "Dades restaurades des de $(basename "$file")."
-        info "Si has importat dades del XAMPP, entra amb els mateixos usuaris i contrasenyes que tenies allà."
+        info "Si has importat dades d'una instal·lació anterior, entra amb els mateixos usuaris i contrasenyes que tenies allà."
         return 0
     fi
     dc start runner >/dev/null 2>&1
@@ -991,7 +991,7 @@ menu() {
    ${W}4${N}) Arrencar / aturar / reiniciar
    ${W}5${N}) Veure logs
    ${W}6${N}) Fer una còpia de seguretat ara
-   ${W}7${N}) Restaurar una còpia ${D}(o importar dades del XAMPP)${N}
+   ${W}7${N}) Restaurar una còpia ${D}(o importar dades d'una instal·lació anterior)${N}
    ${W}8${N}) Actualitzar BatSignal
    ${W}9${N}) Usuaris del panell ${D}(crear, contrasenya oblidada)${N}
   ${W}10${N}) Configuració ${D}(port, domini, zona horària, heartbeat)${N}
