@@ -79,12 +79,16 @@ Tot es fa amb un sol script amb menú, `batsignal.sh`. Requisits: un servidor
 Linux (Ubuntu, Debian, CentOS, Rocky, Alma...) amb accés d'administrador.
 Docker no cal tenir-lo: l'script l'instal·la.
 
-1. Copia la carpeta `BatSignal` sencera al servidor (p. ex. a `/opt/batsignal`)
-   amb WinSCP, `scp` o git.
-2. Entra per SSH i executa:
+1. Entra per SSH al servidor i clona el repositori (és públic, no cal cap
+   autenticació):
 
    ```
+   git clone https://github.com/jantorras/batsignal.git /opt/batsignal
    cd /opt/batsignal
+   ```
+2. Executa l'script:
+
+   ```
    sudo bash batsignal.sh
    ```
 3. Tria **1) Instal·lar**. L'script comprova el servidor, instal·la Docker si
