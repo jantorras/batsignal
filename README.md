@@ -146,6 +146,16 @@ IP:port continua funcionant sempre, encara que hi hagi un domini configurat.
 Tècnicament s'afegeix un tercer contenidor (`proxy`, Caddy) que només
 arrenca quan hi ha un domini configurat.
 
+**Si el port 80 ja el fa servir aaPanel** (perquè el servidor també allotja
+altres webs), en mode sense HTTPS l'script et proposarà un port alternatiu
+(p. ex. 81) i, si detecta que aaPanel gestiona Nginx o Apache, oferirà
+afegir-hi automàticament un proxy invers perquè el domini funcioni igualment
+sense haver d'indicar el port (aaPanel, al port 80, redirigeix internament
+cap al 81). Sempre valida la configuració abans de recarregar-la i mai toca
+un fitxer que no hagi creat ell mateix. Amb OpenLiteSpeed (o qualsevol altra
+cosa) no s'automatitza; l'script indica els passos per fer-ho a mà des
+d'aaPanel.
+
 **Importar dades d'una instal·lació anterior:** exporta la BD `batsignal`
 (phpMyAdmin → Exportar, o `mysqldump`), copia el fitxer `.sql`/`.sql.gz` a
 `backups/` al servidor i tria **7) Restaurar**. S'hi aplicaran les
