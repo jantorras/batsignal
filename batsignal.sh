@@ -586,6 +586,18 @@ do_domain_config() {
 
         if [[ $p != 80 && -d /www/server/panel ]]; then
             ws=$(aapanel_webserver)
+
+            # Si aaPanel gestiona Nginx/Apache i encara no hi ha clau API, s'ofereix
+            # configurar-la aquí mateix (en lloc d'obligar a passar abans per Configuració).
+            if [[ $ws == nginx || $ws == apache ]] && ! aapanel_api_configured; then
+                if confirm "S'ha detectat aaPanel gestionant $ws al port 80. Vols connectar amb la seva API perquè «$domain» es creï com una web real dins del panell, en lloc de només un fitxer de configuració?" n; then
+                    info "A aaPanel: Configuració del panell → interfície API → activa-la i copia la clau."
+                    env_set AAPANEL_API_URL "$(prompt "URL del panell (p. ex. http://127.0.0.1:8888)" "http://127.0.0.1:8888")"
+                    env_set AAPANEL_API_KEY "$(prompt "Clau API")"
+                    aapanel_api_configured || warn "Sense clau, no es pot fer servir la API; seguim amb el mètode de fitxer."
+                fi
+            fi
+
             if aapanel_api_configured; then
                 if confirm "Vols que BatSignal creï «$domain» com a web dins d'aaPanel (via la seva API), amb el proxy invers cap a 127.0.0.1:$p?" s; then
                     if aapanel_api_create_site "$domain" "$p"; then
@@ -600,7 +612,7 @@ do_domain_config() {
                     fi
                 fi
             elif [[ $ws == nginx || $ws == apache ]]; then
-                if confirm "S'ha detectat aaPanel gestionant $ws al port 80. Vols que hi afegeixi un proxy invers perquè «$domain» funcioni sense indicar el port (80 → 127.0.0.1:$p)? (No apareixerà com a web dins d'aaPanel; per això cal la seva API — Configuració → aaPanel)" s; then
+                if confirm "Vols que hi afegeixi igualment un proxy invers directe perquè «$domain» funcioni sense indicar el port (no apareixerà com a web dins d'aaPanel)?" s; then
                     if aapanel_proxy_write "$domain" "$p"; then
                         ok "Proxy invers afegit a aaPanel."
                     else
