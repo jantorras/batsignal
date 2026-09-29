@@ -4,7 +4,7 @@
 <?php endif; ?>
 <script>window.BS_I18N = <?= json_encode(BatSignal\I18n::jsDict(), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;</script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-<script src="assets/js/app.js?v=3" defer></script>
+<script src="assets/js/app.js?v=4" defer></script>
 <script>
 // Busy feedback on submit so slow actions (SMTP test, saving) never look frozen.
 document.addEventListener('submit', function (e) {

@@ -125,6 +125,42 @@
         setTimeout(function () { sky.remove(); }, 4400);
     });
 
+    /* ---------- Login: outside the card, the pointer becomes a bat and the beam follows it ---------- */
+    (function () {
+        var card = document.querySelector('body.auth-page .auth-card');
+        if (!card || reduceMotion) return;
+
+        var cursor = el('div', 'bat-cursor');
+        cursor.appendChild(batSvg('bat-cursor-icon'));
+        document.body.appendChild(cursor);
+
+        var tracking = false;
+        function setTracking(on) {
+            if (tracking === on) return;
+            tracking = on;
+            document.body.classList.toggle('beam-tracking', on);
+            document.body.classList.toggle('bat-cursor-active', on);
+        }
+
+        document.addEventListener('mousemove', function (e) {
+            var r = card.getBoundingClientRect();
+            var inside = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+            setTracking(!inside);
+            if (inside) return;
+
+            cursor.style.left = e.clientX + 'px';
+            cursor.style.top = e.clientY + 'px';
+
+            // The beam's pivot sits below the viewport (see body::before: left 50%, bottom -20vh);
+            // "up" (0deg) points straight at the top of the screen from there.
+            var ox = window.innerWidth / 2, oy = window.innerHeight * 1.2;
+            var deg = Math.atan2(e.clientX - ox, oy - e.clientY) * 180 / Math.PI;
+            deg = Math.max(-85, Math.min(85, deg));
+            document.body.style.setProperty('--beam-angle', deg.toFixed(1) + 'deg');
+        });
+        document.addEventListener('mouseleave', function () { setTracking(false); });
+    })();
+
     /* ---------- Bat-Computer: live progress for "Executar ara" ---------- */
     function openBatComputer(form) {
         var siteId = form.dataset.runSite;
