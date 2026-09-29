@@ -156,6 +156,24 @@ dc() {
     "${COMPOSE[@]}" --project-directory "$APP_DIR" "${files[@]}" --env-file "$ENV_FILE" "${profiles[@]}" "$@"
 }
 
+# Igual que dc(), però amb un límit de temps. `docker compose exec` pot
+# quedar-se penjat sense avisar si el contenidor va lent o Docker té un mal
+# dia; les consultes ràpides (estat, comptar usuaris...) no s'han d'esperar
+# mai indefinidament — que falli d'una vegada és sempre millor que quedar-se
+# pillat sense mostrar res.
+dc_timeout() { # dc_timeout <segons> <ordres per a docker compose...>
+    local secs=$1 files=(-f "$COMPOSE_FILE") profiles=()
+    shift
+    [[ -f $OVERRIDE_FILE ]] && files+=(-f "$OVERRIDE_FILE")
+    [[ -n "$(env_get DOMAIN)" ]] && profiles=(--profile domain)
+    if have timeout; then
+        # -k: si al cap de $secs no ha acabat sol, al cap de 5s més el mata de veritat (KILL).
+        timeout -k 5 "$secs" "${COMPOSE[@]}" --project-directory "$APP_DIR" "${files[@]}" --env-file "$ENV_FILE" "${profiles[@]}" "$@"
+    else
+        "${COMPOSE[@]}" --project-directory "$APP_DIR" "${files[@]}" --env-file "$ENV_FILE" "${profiles[@]}" "$@"
+    fi
+}
+
 start_docker() {
     docker_ok && return 0
     fix "El servei Docker està aturat; arrencant-lo..."
@@ -476,7 +494,7 @@ aapanel_api_call() { # aapanel_api_call </ruta?action=X> [camp=valor ...]
 # instal·lat, així que es fa servir sempre el PHP del propi contenidor `web`.
 aapanel_php() { # aapanel_php <codi-php> [arg1] [arg2] ...
     [[ $(svc_state web) == running* ]] || return 1
-    dc exec -T web php -r "$@" 2>/dev/null
+    dc_timeout 15 exec -T web php -r "$@" 2>/dev/null
 }
 
 aapanel_json_get() { # aapanel_json_get <json> <camp>
@@ -668,17 +686,30 @@ svc_uptime() { # segons des que va arrencar el contenidor
     started=$(docker inspect -f '{{.State.StartedAt}}' "$id" 2>/dev/null) || { echo 0; return; }
     echo $(( $(date +%s) - $(date -d "$started" +%s 2>/dev/null || date +%s) ))
 }
+# Un "." cada ~15s mentre s'espera, perquè una comprovació llegítima de
+# 1-2 minuts no sembli que l'script s'ha quedat penjat sense fer res.
 wait_health() { # wait_health servei segons → 0 quan està "healthy"
-    local svc=$1 max=${2:-90} t=0
+    local svc=$1 max=${2:-90} t=0 printed=0
     while (( t < max )); do
-        [[ $(svc_state "$svc") == "running|healthy" ]] && return 0
+        [[ $(svc_state "$svc") == "running|healthy" ]] && { (( printed )) && echo; return 0; }
+        (( QUIET )) || { (( t > 0 && t % 15 == 0 )) && { printf '.'; printed=1; }; }
         sleep 3; t=$((t + 3))
     done
+    (( printed )) && echo
     return 1
 }
-wait_web() { local max=${1:-90} t=0; while (( t < max )); do web_ok 5 && return 0; sleep 3; t=$((t + 3)); done; return 1; }
+wait_web() {
+    local max=${1:-90} t=0 printed=0
+    while (( t < max )); do
+        web_ok 5 && { (( printed )) && echo; return 0; }
+        (( QUIET )) || { (( t > 0 && t % 15 == 0 )) && { printf '.'; printed=1; }; }
+        sleep 3; t=$((t + 3))
+    done
+    (( printed )) && echo
+    return 1
+}
 
-db_query() { dc exec -T -e MYSQL_PWD="$(env_get DB_ROOT_PASSWORD)" db mariadb -N -B -uroot batsignal -e "$1" 2>/dev/null; }
+db_query() { dc_timeout 15 exec -T -e MYSQL_PWD="$(env_get DB_ROOT_PASSWORD)" db mariadb -N -B -uroot batsignal -e "$1" 2>/dev/null; }
 runner_age() { db_query "SELECT TIMESTAMPDIFF(SECOND, setting_value, NOW()) FROM settings WHERE setting_key='runner_heartbeat'" | tr -d '\r' | grep -E '^[0-9]+$'; }
 
 human_age() { local s=$1; if (( s < 120 )); then echo "$s s"; elif (( s < 7200 )); then echo "$((s / 60)) min"; else echo "$((s / 3600)) h"; fi; }
@@ -758,7 +789,7 @@ create_admin() {
         [[ $p1 == "$p2" ]] || { warn "No coincideixen."; continue; }
         break
     done
-    if out=$(printf '%s\n' "$p1" | dc exec -T web php bin/admin.php create "$user" 2>&1); then ok "$out"; else err "$out"; return 1; fi
+    if out=$(printf '%s\n' "$p1" | dc_timeout 30 exec -T web php bin/admin.php create "$user" 2>&1); then ok "$out"; else err "$out"; return 1; fi
 }
 
 do_install() {
@@ -807,10 +838,10 @@ do_install() {
         err "No arrenca del tot. Provant de reparar-ho automàticament..."
         do_repair || { err "Revisa els logs (menú → Veure logs)."; return 1; }
     fi
-    dc exec -T web php bin/migrate.php >/dev/null 2>&1 || warn "No s'han pogut aplicar les migracions ara; el runner ho tornarà a provar."
+    dc_timeout 60 exec -T web php bin/migrate.php >/dev/null 2>&1 || warn "No s'han pogut aplicar les migracions ara; el runner ho tornarà a provar."
 
     step "6/8" "Usuari administrador"
-    local users; users=$(dc exec -T web php bin/admin.php count 2>/dev/null | tr -d '\r')
+    local users; users=$(dc_timeout 15 exec -T web php bin/admin.php count 2>/dev/null | tr -d '\r')
     if [[ ${users:-0} =~ ^[0-9]+$ ]] && (( users > 0 )); then ok "Ja hi ha $users usuari(s)."; else create_admin; fi
 
     step "7/8" "Vigilant automàtic"
@@ -969,9 +1000,13 @@ do_repair() {
     else
         warn "Els checks no s'executen${age:+ des de fa $(human_age "$age")}."
         fix "Reiniciant el runner..."
-        dc restart runner >/dev/null 2>&1
-        local t=0; age=""
-        while (( t < 120 )); do sleep 5; t=$((t + 5)); age=$(runner_age); [[ -n $age ]] && (( age < 90 )) && break; done
+        dc_timeout 30 restart runner >/dev/null 2>&1
+        local t=0 printed=0; age=""
+        while (( t < 120 )); do
+            (( QUIET )) || { (( t > 0 && t % 15 == 0 )) && { printf '.'; printed=1; }; }
+            sleep 5; t=$((t + 5)); age=$(runner_age); [[ -n $age ]] && (( age < 90 )) && break
+        done
+        (( printed )) && echo
         if [[ -n $age ]] && (( age < 90 )); then ok "Runner recuperat."
         else err "El runner continua aturat. Últimes línies del log:"; dc logs --tail=25 runner; problems=$((problems + 1)); fi
     fi
@@ -1023,7 +1058,7 @@ do_backup() {
     wait_health db 60 || { err "La base de dades no respon; prova primer «Diagnosticar i reparar»."; return 1; }
     mkdir -p "$BACKUP_DIR"; chmod 700 "$BACKUP_DIR"
     local file; file="$BACKUP_DIR/batsignal-$(date +%Y%m%d-%H%M%S).sql.gz"
-    if dc exec -T -e MYSQL_PWD="$(env_get DB_ROOT_PASSWORD)" db mariadb-dump -uroot --single-transaction --routines batsignal | gzip >"$file" \
+    if dc_timeout 300 exec -T -e MYSQL_PWD="$(env_get DB_ROOT_PASSWORD)" db mariadb-dump -uroot --single-transaction --routines batsignal | gzip >"$file" \
         && gzip -t "$file" 2>/dev/null && [[ $(gzip -dc "$file" | head -c 100000 | grep -c 'CREATE TABLE') -gt 0 ]]; then
         chmod 600 "$file"
         rotate_backups
@@ -1062,11 +1097,11 @@ do_restore() {
     dc stop runner >/dev/null 2>&1
     local pw; pw=$(env_get DB_ROOT_PASSWORD)
     # Es recrea la BD sencera: així no queden taules d'una versió diferent a la de la còpia.
-    dc exec -T -e MYSQL_PWD="$pw" db mariadb -uroot -e "DROP DATABASE IF EXISTS batsignal; CREATE DATABASE batsignal CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" \
+    dc_timeout 30 exec -T -e MYSQL_PWD="$pw" db mariadb -uroot -e "DROP DATABASE IF EXISTS batsignal; CREATE DATABASE batsignal CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" \
         || { err "No s'ha pogut preparar la base de dades."; dc start runner >/dev/null 2>&1; return 1; }
     local reader=(cat "$file"); [[ $file == *.gz ]] && reader=(gzip -dc "$file")
-    if "${reader[@]}" | sed '/^CREATE DATABASE/d; /^USE /d' | dc exec -T -e MYSQL_PWD="$pw" db mariadb -uroot batsignal; then
-        dc exec -T web php bin/migrate.php
+    if "${reader[@]}" | sed '/^CREATE DATABASE/d; /^USE /d' | dc_timeout 600 exec -T -e MYSQL_PWD="$pw" db mariadb -uroot batsignal; then
+        dc_timeout 60 exec -T web php bin/migrate.php
         dc start runner >/dev/null 2>&1
         ok "Dades restaurades des de $(basename "$file")."
         info "Si has importat dades d'una instal·lació anterior, entra amb els mateixos usuaris i contrasenyes que tenies allà."
@@ -1095,7 +1130,7 @@ do_update() {
     dc build || { err "La construcció ha fallat; la versió anterior continua funcionant."; return 1; }
     up_services || return 1
     step "4/4" "Comprovant"
-    wait_web 120 && dc exec -T web php bin/migrate.php && ok "Actualització completada." || { err "Alguna cosa no ha arrencat bé; executant la reparació..."; do_repair; }
+    wait_web 120 && dc_timeout 60 exec -T web php bin/migrate.php && ok "Actualització completada." || { err "Alguna cosa no ha arrencat bé; executant la reparació..."; do_repair; }
 }
 
 do_logs() {
@@ -1131,16 +1166,16 @@ do_users() {
     echo "  1) Llistar usuaris    2) Crear usuari    3) Canviar contrasenya (contrasenya oblidada)"
     local user p1 p2 out
     case $(prompt "Tria" "1") in
-        1) dc exec -T web php bin/admin.php list ;;
+        1) dc_timeout 15 exec -T web php bin/admin.php list ;;
         2) create_admin ;;
         3)
-            dc exec -T web php bin/admin.php list
+            dc_timeout 15 exec -T web php bin/admin.php list
             user=$(prompt "Usuari")
             [[ -z $user ]] && return
             read -r -s -p "Contrasenya nova (mínim 8): " p1; echo
             read -r -s -p "Repeteix-la: " p2; echo
             [[ $p1 == "$p2" ]] || { err "No coincideixen."; return 1; }
-            if out=$(printf '%s\n' "$p1" | dc exec -T web php bin/admin.php reset "$user" 2>&1); then ok "$out"; else err "$out"; fi
+            if out=$(printf '%s\n' "$p1" | dc_timeout 30 exec -T web php bin/admin.php reset "$user" 2>&1); then ok "$out"; else err "$out"; fi
             ;;
     esac
 }
