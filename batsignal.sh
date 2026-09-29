@@ -962,19 +962,26 @@ do_uninstall() {
     warn "S'aturarà i s'eliminarà BatSignal d'aquest servidor."
     confirm "Continuar?" n || return 0
     confirm "Fer una còpia de seguretat final abans?" s && do_backup
+
+    fix "Desactivant el vigilant automàtic..."
     rm -f "$CRON_FILE"
-    dc down >/dev/null 2>&1 && fix "Contenidors eliminats."
+
+    fix "Aturant i eliminant els contenidors (pot trigar un moment)..."
+    if dc down; then ok "Contenidors eliminats."; else warn "Hi ha hagut algun problema aturant els contenidors; continuo igualment."; fi
+
     if confirm "Esborrar també la base de dades (webs, historial, usuaris)?" n; then
         if [[ $(prompt "Escriu ESBORRAR per confirmar") == "ESBORRAR" ]]; then
-            docker volume rm "$DB_VOLUME" batsignal_caddy_data batsignal_caddy_config >/dev/null 2>&1
+            fix "Esborrant els volums de dades..."
+            docker volume rm "$DB_VOLUME" batsignal_caddy_data batsignal_caddy_config 2>&1 | sed 's/^/    /'
             rm -f "$ENV_FILE" "$OVERRIDE_FILE"
             write_caddyfile
-            fix "Dades esborrades."
+            ok "Dades esborrades."
         fi
     else
         info "Les dades es conserven: si tornes a instal·lar, ho recuperaràs tot."
     fi
     info "El codi i les còpies ($BACKUP_DIR) no s'han tocat."
+    ok "${W}BatSignal desinstal·lat.${N}"
 }
 
 # ─────────────────────────────── menú ───────────────────────────────
