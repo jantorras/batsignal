@@ -1,0 +1,9 @@
+.git
+.claude
+.env
+.env.*
+!.env.example
+backups
+logs
+cron/.run.lock
+*.log

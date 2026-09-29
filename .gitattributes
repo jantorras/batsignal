@@ -1,0 +1,5 @@
+# Scripts and container files must keep LF endings even when edited on Windows.
+*.sh text eol=lf
+docker/* text eol=lf
+docker-compose.yml text eol=lf
+.env.example text eol=lf

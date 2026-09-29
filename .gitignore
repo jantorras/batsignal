@@ -1,0 +1,7 @@
+.env
+docker/Caddyfile
+docker-compose.override.yml
+backups/
+logs/
+cron/.run.lock
+.claude/

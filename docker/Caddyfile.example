@@ -1,0 +1,3 @@
+:80 {
+	respond "BatSignal: configura un domini des del menú (opció 10 → Domini)." 200
+}
