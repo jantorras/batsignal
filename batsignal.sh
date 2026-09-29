@@ -347,12 +347,111 @@ check_domain() {
     [[ $code == 200 ]]
 }
 
+# ── Integració opcional amb aaPanel: quan el port 80 ja el fa servir aaPanel
+# (Nginx o Apache), es pot afegir-hi un proxy invers perquè el domini funcioni
+# sense indicar el port. Només Nginx i Apache (rutes estàndard d'aaPanel);
+# amb OpenLiteSpeed o qualsevol altra cosa no s'hi toca res automàticament.
+# Sempre es valida la configuració abans de recarregar-la, i mai s'esborra
+# un fitxer que BatSignal no hagi creat (es marca amb un comentari propi).
+AAPANEL_MARKER="Gestionat per BatSignal"
+
+aapanel_webserver() {
+    if [[ -x /www/server/nginx/sbin/nginx && -d /www/server/panel/vhost/nginx ]]; then
+        echo nginx
+    elif [[ -x /www/server/apache/bin/apachectl && -d /www/server/panel/vhost/apache ]]; then
+        echo apache
+    elif [[ -d /www/server/panel/vhost/openlitespeed || -d /usr/local/lsws ]]; then
+        echo openlitespeed
+    fi
+}
+
+aapanel_proxy_path() { # aapanel_proxy_path <domini>
+    case $(aapanel_webserver) in
+        nginx) echo "/www/server/panel/vhost/nginx/$1.conf" ;;
+        apache) echo "/www/server/panel/vhost/apache/$1.conf" ;;
+    esac
+}
+
+aapanel_proxy_write() { # aapanel_proxy_write <domini> <port>
+    local domain=$1 port=$2 ws path out
+    ws=$(aapanel_webserver)
+    [[ $ws == nginx || $ws == apache ]] || return 1
+    path=$(aapanel_proxy_path "$domain")
+
+    if [[ -f $path ]] && ! grep -q "$AAPANEL_MARKER" "$path" 2>/dev/null; then
+        err "Ja hi ha una configuració a aaPanel per «$domain» que BatSignal no ha creat ($path). No la toco."
+        return 1
+    fi
+
+    if [[ $ws == nginx ]]; then
+        cat >"$path" <<EOF
+# $AAPANEL_MARKER — no editis a mà (es genera i s'elimina des de batsignal.sh, Configuració → Domini).
+server {
+    listen 80;
+    server_name $domain;
+    location / {
+        proxy_pass http://127.0.0.1:$port;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_http_version 1.1;
+        proxy_buffering off;
+    }
+}
+EOF
+        out=$(/www/server/nginx/sbin/nginx -t -c /www/server/nginx/conf/nginx.conf 2>&1)
+    else
+        cat >"$path" <<EOF
+# $AAPANEL_MARKER — no editis a mà (es genera i s'elimina des de batsignal.sh, Configuració → Domini).
+<VirtualHost *:80>
+    ServerName $domain
+    ProxyPreserveHost On
+    ProxyPass / http://127.0.0.1:$port/
+    ProxyPassReverse / http://127.0.0.1:$port/
+</VirtualHost>
+EOF
+        out=$(/www/server/apache/bin/apachectl configtest 2>&1)
+    fi
+
+    if ! grep -qi "syntax is ok\|syntax ok" <<<"$out"; then
+        err "La configuració de $ws no ha passat la validació; no recarrego res. Detall:"
+        echo "$out" | tail -n 10 | sed 's/^/    /'
+        rm -f "$path"
+        return 1
+    fi
+    if [[ $ws == nginx ]]; then
+        /www/server/nginx/sbin/nginx -s reload -c /www/server/nginx/conf/nginx.conf >/dev/null 2>&1
+    else
+        /www/server/apache/bin/apachectl graceful >/dev/null 2>&1
+    fi
+}
+
+aapanel_proxy_remove() { # aapanel_proxy_remove <domini>
+    local domain=${1:-} ws path
+    [[ -z $domain ]] && return 0
+    ws=$(aapanel_webserver)
+    [[ $ws == nginx || $ws == apache ]] || return 0
+    path=$(aapanel_proxy_path "$domain")
+    [[ -f $path ]] || return 0
+    grep -q "$AAPANEL_MARKER" "$path" 2>/dev/null || return 0
+
+    rm -f "$path"
+    if [[ $ws == nginx ]]; then
+        /www/server/nginx/sbin/nginx -s reload -c /www/server/nginx/conf/nginx.conf >/dev/null 2>&1
+    else
+        /www/server/apache/bin/apachectl graceful >/dev/null 2>&1
+    fi
+}
+
 disable_domain() {
+    local domain; domain=$(env_get DOMAIN)
     if detect_compose && docker_ok; then
         fix "Aturant el proxy del domini..."
         dc stop proxy >/dev/null 2>&1
         dc rm -f proxy >/dev/null 2>&1
     fi
+    aapanel_proxy_remove "$domain"
     env_set DOMAIN ""
     env_set DOMAIN_TLS "off"
     remove_override
@@ -361,11 +460,12 @@ disable_domain() {
 }
 
 do_domain_config() {
-    local current domain tls p ok_probe i
+    local current domain tls p ws ok_probe i
     current=$(env_get DOMAIN)
     if [[ -n $current ]]; then
         echo "  Domini actual: ${W}$(domain_url)${N} $( [[ $(env_get DOMAIN_TLS) == auto ]] && echo "(HTTPS automàtic)" || echo "(HTTP)" )"
         if confirm "Vols desactivar l'accés per domini?" n; then disable_domain; return 0; fi
+        aapanel_proxy_remove "$current"
     fi
     domain=$(prompt "Nom de domini (p. ex. batsignal.empresa.com; buit per no tocar res)")
     [[ -z $domain ]] && { info "Sense canvis."; return 0; }
@@ -388,6 +488,21 @@ do_domain_config() {
         tls=off
         env_set HTTP_PORT "$p"
         remove_override
+
+        if [[ $p != 80 && -d /www/server/panel ]]; then
+            ws=$(aapanel_webserver)
+            if [[ $ws == nginx || $ws == apache ]]; then
+                if confirm "S'ha detectat aaPanel gestionant $ws al port 80. Vols que hi afegeixi un proxy invers perquè «$domain» funcioni sense indicar el port (80 → 127.0.0.1:$p)?" s; then
+                    if aapanel_proxy_write "$domain" "$p"; then
+                        ok "Proxy invers afegit a aaPanel."
+                    else
+                        warn "No s'ha pogut configurar automàticament. Manual: aaPanel → Website → Add site → $domain → Reverse Proxy → http://127.0.0.1:$p"
+                    fi
+                fi
+            elif [[ -n $ws ]]; then
+                info "S'ha detectat aaPanel amb $ws, que BatSignal no configura automàticament. Per accedir sense port: aaPanel → Website → Add site → $domain → Reverse Proxy → http://127.0.0.1:$p"
+            fi
+        fi
     fi
     env_set DOMAIN "$domain"
     env_set DOMAIN_TLS "$tls"
@@ -965,6 +1080,7 @@ do_uninstall() {
 
     fix "Desactivant el vigilant automàtic..."
     rm -f "$CRON_FILE"
+    aapanel_proxy_remove "$(env_get DOMAIN)"
 
     fix "Aturant i eliminant els contenidors (pot trigar un moment)..."
     if dc down; then ok "Contenidors eliminats."; else warn "Hi ha hagut algun problema aturant els contenidors; continuo igualment."; fi
