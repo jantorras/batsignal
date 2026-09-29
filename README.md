@@ -156,6 +156,16 @@ un fitxer que no hagi creat ell mateix. Amb OpenLiteSpeed (o qualsevol altra
 cosa) no s'automatitza; l'script indica els passos per fer-ho a mà des
 d'aaPanel.
 
+Amb aquest mètode, el domini funciona però **no apareix com a "Website"**
+dins d'aaPanel. Per fer-ho de veritat (**menú → Configuració → API
+d'aaPanel**): activa la API des d'aaPanel (Configuració del panell →
+interfície API) i desa'n la clau. A partir d'aquí, en configurar un domini
+l'script crearà la web dins del panell mateix (amb el seu proxy invers),
+via la API oficial d'aaPanel. És una API que aaPanel no documenta
+oficialment (però sí, de manera consistent, la comunitat): si la resposta no
+és la que s'espera, l'script en mostra el contingut exacte per poder-ho
+ajustar, i si falla cau automàticament al mètode de fitxer d'abans.
+
 **Importar dades d'una instal·lació anterior:** exporta la BD `batsignal`
 (phpMyAdmin → Exportar, o `mysqldump`), copia el fitxer `.sql`/`.sql.gz` a
 `backups/` al servidor i tria **7) Restaurar**. S'hi aplicaran les

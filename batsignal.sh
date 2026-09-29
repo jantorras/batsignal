@@ -430,6 +430,8 @@ EOF
 aapanel_proxy_remove() { # aapanel_proxy_remove <domini>
     local domain=${1:-} ws path
     [[ -z $domain ]] && return 0
+    aapanel_api_configured && aapanel_api_delete_site "$domain"
+
     ws=$(aapanel_webserver)
     [[ $ws == nginx || $ws == apache ]] || return 0
     path=$(aapanel_proxy_path "$domain")
@@ -442,6 +444,99 @@ aapanel_proxy_remove() { # aapanel_proxy_remove <domini>
     else
         /www/server/apache/bin/apachectl graceful >/dev/null 2>&1
     fi
+}
+
+# ── aaPanel via la seva API (opcional): crea una web de veritat dins del
+# panell, amb el seu proxy invers, en lloc de només deixar un fitxer de
+# configuració que el panell no coneix. Cal activar la API des d'aaPanel
+# (Configuració del panell → interfície API) i guardar-ne la clau (menú →
+# Configuració → aaPanel). Sense això configurat, es fa servir sempre el
+# mètode de fitxer d'aquí sobre. És una API no documentada oficialment per
+# aaPanel (però sí, de manera consistent, per la comunitat): si la resposta
+# no és la que s'espera, es mostra tal qual per poder-ho ajustar.
+aapanel_api_configured() {
+    [[ -n $(env_get AAPANEL_API_URL) && -n $(env_get AAPANEL_API_KEY) ]]
+}
+
+aapanel_api_call() { # aapanel_api_call </ruta?action=X> [camp=valor ...]
+    local path=$1 url key ts token args f
+    shift
+    url=$(env_get AAPANEL_API_URL); url=${url%/}
+    key=$(env_get AAPANEL_API_KEY)
+    ts=$(date +%s)
+    token=$(printf '%s' "${ts}$(printf '%s' "$key" | md5sum | cut -d' ' -f1)" | md5sum | cut -d' ' -f1)
+    args=(--data-urlencode "request_time=$ts" --data-urlencode "request_token=$token")
+    for f in "$@"; do args+=(--data-urlencode "$f"); done
+    curl -fsS -m 20 -X POST "${args[@]}" "$url$path" 2>&1
+}
+
+# Petit ajudant en PHP per llegir un camp d'una resposta JSON sense dependre
+# del format exacte (bool/string, ordre de claus...) que la crida a bash+grep
+# no pot garantir. El servidor (fora de Docker) no té per què tenir PHP
+# instal·lat, així que es fa servir sempre el PHP del propi contenidor `web`.
+aapanel_php() { # aapanel_php <codi-php> [arg1] [arg2] ...
+    [[ $(svc_state web) == running* ]] || return 1
+    dc exec -T web php -r "$@" 2>/dev/null
+}
+
+aapanel_json_get() { # aapanel_json_get <json> <camp>
+    aapanel_php '
+        $j = json_decode($argv[1], true);
+        $v = is_array($j) ? ($j[$argv[2]] ?? null) : null;
+        if (is_bool($v)) { echo $v ? "1" : "0"; }
+        elseif (is_scalar($v)) { echo $v; }
+    ' "$1" "$2"
+}
+
+aapanel_api_site_id() { # aapanel_api_site_id <domini> → id (buit si no es troba)
+    local out
+    out=$(aapanel_api_call "/data?action=getData" "table=sites" "limit=200") || return 1
+    aapanel_php '
+        $j = json_decode($argv[1], true);
+        $rows = $j["data"] ?? $j;
+        if (!is_array($rows)) exit;
+        foreach ($rows as $r) { if (($r["name"] ?? "") === $argv[2]) { echo $r["id"]; break; } }
+    ' "$out" "$1"
+}
+
+aapanel_api_create_site() { # aapanel_api_create_site <domini> <port>
+    aapanel_api_configured || return 1
+    [[ $(svc_state web) == running* ]] || { err "Cal que el contenidor web estigui en marxa per fer servir la API d'aaPanel."; return 1; }
+    local domain=$1 port=$2 webname out ok
+    webname="{\"domain\":\"$domain\",\"domainlist\":[],\"count\":0}"
+
+    out=$(aapanel_api_call "/site?action=AddSite" \
+        "webname=$webname" "path=/www/wwwroot/$domain" "type_id=0" "type=PHP" \
+        "version=00" "port=80" "ps=$domain (BatSignal)" "ftp=false" "sql=0" "codeing=utf8")
+    if [[ -z $out ]]; then err "No s'ha pogut contactar amb la API d'aaPanel (URL o xarxa)."; return 1; fi
+    ok=$(aapanel_json_get "$out" siteStatus)
+    if [[ $ok != 1 ]]; then
+        err "aaPanel (crear web) ha respost:"
+        echo "$out" | sed 's/^/    /'
+        return 1
+    fi
+
+    out=$(aapanel_api_call "/site?action=CreateProxy" \
+        "sitename=$domain" "proxyname=BatSignal" "proxydir=/" \
+        "proxysite=http://127.0.0.1:$port" "todomain=$domain" "port=80" \
+        "type=1" "cache=0" "cachetime=1" "subfilter=[]" "advanced=0")
+    ok=$(aapanel_json_get "$out" status)
+    if [[ $ok != 1 ]]; then
+        err "aaPanel (afegir el proxy invers a la web) ha respost:"
+        echo "$out" | sed 's/^/    /'
+        warn "La web s'ha creat a aaPanel però sense el proxy invers; caldrà afegir-lo a mà des del panell (pestanya Reverse Proxy de la web «$domain»)."
+        return 1
+    fi
+    return 0
+}
+
+aapanel_api_delete_site() { # aapanel_api_delete_site <domini>
+    aapanel_api_configured || return 0
+    local domain=$1 id out
+    id=$(aapanel_api_site_id "$domain")
+    [[ -z $id ]] && return 0
+    out=$(aapanel_api_call "/site?action=DeleteSite" "id=$id" "webname=$domain" "ftp=1" "database=1" "path=1")
+    [[ $(aapanel_json_get "$out" status) == 1 ]]
 }
 
 disable_domain() {
@@ -491,8 +586,21 @@ do_domain_config() {
 
         if [[ $p != 80 && -d /www/server/panel ]]; then
             ws=$(aapanel_webserver)
-            if [[ $ws == nginx || $ws == apache ]]; then
-                if confirm "S'ha detectat aaPanel gestionant $ws al port 80. Vols que hi afegeixi un proxy invers perquè «$domain» funcioni sense indicar el port (80 → 127.0.0.1:$p)?" s; then
+            if aapanel_api_configured; then
+                if confirm "Vols que BatSignal creï «$domain» com a web dins d'aaPanel (via la seva API), amb el proxy invers cap a 127.0.0.1:$p?" s; then
+                    if aapanel_api_create_site "$domain" "$p"; then
+                        ok "Web «$domain» creada a aaPanel, amb el proxy invers."
+                    elif [[ $ws == nginx || $ws == apache ]]; then
+                        warn "La API ha fallat; provo el mètode alternatiu (fitxer de configuració directe)..."
+                        if aapanel_proxy_write "$domain" "$p"; then
+                            ok "Proxy invers afegit directament a $ws (no apareixerà com a web dins d'aaPanel)."
+                        else
+                            warn "Tampoc s'ha pogut pel mètode alternatiu. Manual: aaPanel → Website → Add site → $domain → Reverse Proxy → http://127.0.0.1:$p"
+                        fi
+                    fi
+                fi
+            elif [[ $ws == nginx || $ws == apache ]]; then
+                if confirm "S'ha detectat aaPanel gestionant $ws al port 80. Vols que hi afegeixi un proxy invers perquè «$domain» funcioni sense indicar el port (80 → 127.0.0.1:$p)? (No apareixerà com a web dins d'aaPanel; per això cal la seva API — Configuració → aaPanel)" s; then
                     if aapanel_proxy_write "$domain" "$p"; then
                         ok "Proxy invers afegit a aaPanel."
                     else
@@ -1029,7 +1137,9 @@ do_config() {
     installed || { err "Primer cal instal·lar BatSignal."; return 1; }
     echo "  Port actual: ${W}$(env_get WEB_PORT)${N}   Domini: ${W}$(domain_url 2>/dev/null || echo '—')${N}"
     echo "  Zona horària: ${W}$(env_get TZ)${N}   Heartbeat: ${W}$(env_get HEARTBEAT_URL | grep . || echo '—')${N}   Còpies: ${W}$(env_get BACKUP_KEEP)${N}"
-    echo "  1) Canviar el port   2) Domini   3) Zona horària   4) URL de heartbeat (Uptime Kuma)   5) Còpies a conservar"
+    echo "  API aaPanel: ${W}$(aapanel_api_configured && echo configurada || echo '—')${N}"
+    echo "  1) Canviar el port   2) Domini   3) Zona horària   4) URL de heartbeat (Uptime Kuma)"
+    echo "  5) Còpies a conservar   6) API d'aaPanel (per crear-hi la web de veritat)"
     local v
     case $(prompt "Tria" "") in
         1) v=$(ask_port "Port on s'obrirà el panell" "$(env_get WEB_PORT)"); env_set WEB_PORT "$v" ;;
@@ -1037,6 +1147,13 @@ do_config() {
         3) env_set TZ "$(prompt "Zona horària" "$(env_get TZ)")" ;;
         4) info "A Uptime Kuma crea un monitor de tipus «Push» i enganxa aquí la seva URL (buit per desactivar)."; env_set HEARTBEAT_URL "$(prompt "URL")" ;;
         5) v=$(prompt "Quantes còpies conservar" "$(env_get BACKUP_KEEP)"); [[ $v =~ ^[0-9]+$ ]] && env_set BACKUP_KEEP "$v" ;;
+        6)
+            info "A aaPanel: Configuració del panell → interfície API → activa-la i copia la clau. Si el panell ho permet, limita l'accés a 127.0.0.1 (l'script hi truca des del mateix servidor)."
+            env_set AAPANEL_API_URL "$(prompt "URL del panell (p. ex. http://127.0.0.1:8888)" "$(env_get AAPANEL_API_URL | grep . || echo http://127.0.0.1:8888)")"
+            env_set AAPANEL_API_KEY "$(prompt "Clau API (buit per desactivar-ho)")"
+            aapanel_api_configured && ok "Desat. La propera vegada que configuris un domini es proposarà crear-lo com a web d'aaPanel." || ok "Desactivat: es tornarà a fer servir el mètode de fitxer directe."
+            return
+            ;;
         *) return ;;
     esac
     detect_compose && docker_ok && { fix "Aplicant canvis..."; up_services && wait_web 90 && ok "Fet. Panell: $(web_url)"; }
